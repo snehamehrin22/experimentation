@@ -48,45 +48,68 @@ fact_user_health_campaign <- tibble(
     user_id = sample(experimental_users, n_fact_records, replace = TRUE),
     campaign_id = sample(dim_health_campaign$campaign_id, n_fact_records, replace = TRUE)
 ) %>%
-    # Join to get user activation date and campaign activities
     left_join(dim_user %>% select(user_id, activated_ts), by = "user_id") %>%
     left_join(dim_health_campaign %>% select(campaign_id, num_campaign_activities), by = "campaign_id") %>%
+    arrange(user_id, campaign_id) %>%
+    group_by(user_id, campaign_id) %>%
     mutate(
-        campaign_enrolled_ts = pmap_dbl(list(activated_ts), function(act_date) {
-            possible_dates <- seq(act_date, as_datetime("2024-01-01"), by = "day")
-            sample(possible_dates, 1) %>% as.numeric()
-        }) %>% as_datetime(),
-        
-        completion_status = sample(c("completed", "quit", "ongoing"), 
-                                 n_fact_records, 
-                                 prob = c(0.70, 0.20, 0.10), 
-                                 replace = TRUE),
-        
-        # Now num_campaign_activities will be properly aligned with each record
-        campaign_completed_ts = case_when(
-            completion_status == "completed" ~ campaign_enrolled_ts + days(num_campaign_activities),
-            TRUE ~ as.POSIXct(NA)
+        # Initial random enrollment dates with 60-day buffer after activation
+        campaign_enrolled_ts = {
+            start_date = first(activated_ts) + days(60)  # Add 60-day buffer
+            end_date = as_datetime("2024-01-01")
+            
+            if (start_date <= end_date) {
+                date_seq = seq(start_date, end_date, by = "day")
+                if (length(date_seq) >= n()) {
+                    sample(date_seq, n(), replace = FALSE)
+                } else {
+                    sample(date_seq, n(), replace = TRUE)
+                }
+            } else {
+                rep(start_date, n())
+            }
+        },
+        campaign_completed_ts = campaign_enrolled_ts + days(num_campaign_activities)
+    ) %>%
+    # Now adjust enrollment dates to ensure they come after previous completion
+    mutate(
+        campaign_enrolled_ts = case_when(
+            row_number() == 1 ~ campaign_enrolled_ts,
+            # For subsequent enrollments, ensure they're after previous completion
+            TRUE ~ pmax(campaign_enrolled_ts, lag(campaign_completed_ts) + days(1))
         ),
-        
-        campaign_quit_ts = case_when(
-            completion_status == "quit" ~ campaign_enrolled_ts + days(sample(1:14, 1)),
-            TRUE ~ as.POSIXct(NA)
-        ) ) %>% 
-    select(-activated_ts, -completion_status)
+        campaign_completed_ts = campaign_enrolled_ts + days(num_campaign_activities)
+    ) %>%
+    ungroup() %>%
+    select(-activated_ts)
 
 
 
 
 # Create daily step data
 
-# Create daily step data
 fact_daily_steps <- dim_user %>%
     # Start with user and their activation dates
     select(user_id, activated_ts) %>%
-    # Create all possible user-date combinations
-    crossing(date = seq(min(as_date(activated_ts)), ymd("2024-01-01"), by = "day")) %>%
-    # Only keep dates after user activation
-    filter(date >= as_date(activated_ts)) %>%
+    # Join with campaign data to get last completion date
+    left_join(
+        fact_user_health_campaign %>%
+            group_by(user_id) %>%
+            summarise(last_campaign_end = max(campaign_completed_ts)),
+        by = "user_id"
+    ) %>%
+    # Create date range until 60 days after last campaign (or use original end date if user had no campaigns)
+    mutate(
+        end_date = if_else(
+            !is.na(last_campaign_end),
+            as_date(last_campaign_end) + days(60),
+            ymd("2024-01-01")
+        )
+    ) %>%
+    # Create all possible user-date combinations up to the calculated end date
+    crossing(date = seq(min(as_date(activated_ts)), max(.$end_date), by = "day")) %>%
+    # Only keep dates after user activation and before end_date
+    filter(date >= as_date(activated_ts), date <= end_date) %>%
     # Randomly drop some days (device not connected)
     group_by(user_id) %>%
     slice_sample(prop = 0.8) %>%  # Keep 80% of days randomly
@@ -122,7 +145,7 @@ fact_daily_steps <- dim_user %>%
     mutate(
         step_count = pmax(0, round(step_count))
     ) %>%
-    # Remove activation date column
+    # Remove unnecessary columns
     select(user_id, date, step_count) %>%
     # Sort by user and date
     arrange(user_id, date)
