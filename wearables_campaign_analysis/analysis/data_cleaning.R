@@ -156,13 +156,7 @@ mutate(month = month(date)  %>% as_factor(),
 weekdays = weekdays(date)  %>%  as_factor()
 )
 
-fact_daily_steps_cleaned_imputed  <- data.frame()
 
- 
-fact_daily_steps_cleaned_imputed = data.frame()
-fact_daily_steps_cleaned_imputed
-
-f
 
 fact_daily_treatment_group  <- fact_daily_steps_cleaned_imputed  %>% 
 left_join(fact_user_health_campaign  %>% 

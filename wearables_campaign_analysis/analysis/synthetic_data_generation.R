@@ -86,7 +86,7 @@ fact_user_health_campaign <- tibble(
 
 
 
-# Create daily step data
+# Create daily step data with positive campaign effect
 
 fact_daily_steps <- dim_user %>%
     # Start with user and their activation dates
@@ -141,6 +141,25 @@ fact_daily_steps <- dim_user %>%
         step_count = step_count * (1 + sample(seq(-0.2, 0.2, 0.1), n_distinct(user_id), 
                                             replace = TRUE)[as.factor(user_id)])
     ) %>%
+    # Add campaign effect
+    left_join(
+        fact_user_health_campaign %>%
+            select(user_id, campaign_enrolled_ts, campaign_completed_ts),
+        by = "user_id"
+    ) %>%
+    group_by(user_id) %>%
+    mutate(
+        # Increase steps during and after campaign
+        campaign_multiplier = case_when(
+            date >= as_date(campaign_enrolled_ts) & date <= as_date(campaign_completed_ts) ~ 
+                sample(seq(1.2, 1.4, 0.1), 1),  # 20-40% increase during campaign
+            date > as_date(campaign_completed_ts) ~ 
+                sample(seq(1.1, 1.3, 0.1), 1),  # 10-30% increase after campaign
+            TRUE ~ 1.0
+        ),
+        step_count = round(step_count * campaign_multiplier)
+    ) %>%
+    ungroup() %>%
     # Round steps to integers and ensure no negative values
     mutate(
         step_count = pmax(0, round(step_count))
