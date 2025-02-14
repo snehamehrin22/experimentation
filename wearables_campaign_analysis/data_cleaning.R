@@ -1,5 +1,24 @@
 
+source('synthetic_data_generation.R')
 
+dim_user %>% 
+summarize(min_date = min(activated_ts),
+max_date = max(activated_ts)
+)
+
+dim_health_campaign
+
+
+fact_user_health_campaign  %>% 
+group_by(campaign_id)  %>% 
+summarize(total_users = n(),
+unique_users = n_distinct(user_id)
+)
+
+# users enrolled in multiple campaigns
+fact_user_health_campaign  %>% 
+group_by(user_id, campaign_id)  %>% 
+summarize(total = n())
 
 
 # checking if users enrolled in multiple campaigns if there is overlap in between dates

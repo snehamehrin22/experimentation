@@ -1,46 +1,42 @@
 
-# 1. Data Quality Checks
-initial_data_check(dim_user)
 
-initial_data_check(fact_user_health_campaign)
+# 1. Exploratory Analysis
 
-initial_data_check(fact_daily_steps)
+## 1.1 How many users are there?
+user_daily_steps_final  %>%  distinct(user_id) %>% nrow()
 
-# 2. Exploratory Analysis
+## 1.1 User Demographics 
 
-## 2.1 User Demographics 
+univariate_eda(user_daily_steps_final, "age_group")
+univariate_eda(user_daily_steps_final, "sex")
+population_density_plot <- univariate_eda(user_daily_steps_final  %>% select(user_id, population_density)  %>% distinct(), "population_density")
 
-univariate_eda(dim_user, "age_group")
-univariate_eda(dim_user, "sex")
-univariate_eda(dim_user, "population_density")
-
-
-## 2.2 User Health Campaigns
-
-user_health_campaign_cleaned  <-  fact_user_health_campaign  %>% 
-left_join(dim_user, by = 'user_id')  %>% 
-left_join(dim_health_campaign, by = 'campaign_id') 
-
-univariate_eda(user_health_campaign_cleaned, "campaign_name")
 
 
 ## 2.3 Daily Steps
 
-x <- univariate_eda(fact_daily_steps, "step_count")
-x[[1]]
+x <- univariate_eda(user_daily_steps_final, "step_count")
+x[[3]]
 
+str(user_daily_steps_final)
+
+sum(is.na(user_daily_steps_final$month))
+sum(is.na(user_daily_steps_final$step_count))
 
 ## 2.2 Bi-Variate Analysis
 
 # Sex & Step Count
 
-bivariate_eda(fact_daily_steps_cleaned, "sex", "step_count")
+bivariate_sex  <- bivariate_eda(user_daily_steps_final, "sex", "step_count")
+bivariate_sex[[1]]
 
-bivariate_eda(fact_daily_steps_cleaned, "age_group", "step_count")
+bivariate_age_group  <- bivariate_eda(user_daily_steps_final, "age_group", "step_count")
+bivariate_age_group[[1]]
 # Age-Group & Sex Count
-bivariate_eda(fact_daily_steps_cleaned, "month", "step_count")
+x <- bivariate_eda(user_daily_steps_final, "month", "step_count")
+x[[1]]
 
-bivariate_eda(fact_daily_steps_cleaned, "weekdays", "step_count")
+bivariate_eda(user_daily_steps_final, "weekdays", "step_count")
 
 ### 2.3 Multi Variate Analysis
 

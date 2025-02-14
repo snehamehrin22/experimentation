@@ -1,16 +1,27 @@
-library(tidyverse)
-library(lubridate)
-library(uuid)
-library(purrr)
+# ============================================================================
+# Synthetic Health Data Generation Script
+# Purpose: Generate realistic user, campaign, and step count data for analysis
+# Author: Sneha Mehrin
+# ============================================================================
 
-# Set seed for reproducibility
-set.seed(42)
+# Required Libraries
+library(tidyverse)    # For data manipulation and visualization
+library(lubridate)    # For date/time operations
+library(uuid)         # For generating unique identifiers
+library(purrr)        # For functional programming operations
 
-# 1. Create User Table
+# Global Configuration
+set.seed(42)         # Set seed for reproducibility
+n_users <- 5000      # Number of users to generate
+n_campaigns <- 3     # Number of health campaigns
+n_fact_records <- 10000  # Number of campaign enrollment records
 
-n_users  <-  5000
-n_campaigns  <- 3
+# ============================================================================
+# 1. Dimension Tables Generation
+# ============================================================================
 
+# Generate User Dimension Table
+# Contains demographic and geographic information for each user
 dim_user <- tibble(
     user_id = replicate(n_users, UUIDgenerate()),
     activated_ts = sample(seq.Date(from = ymd('2020-01-01'),
@@ -19,30 +30,40 @@ dim_user <- tibble(
                   as_datetime() + hours(sample(8:20, n_users, TRUE)),
     sex = sample(c('female','male','unknown'), 
                 size = n_users, 
-                prob = c(0.70, 0.28, 0.02), 
+                prob = c(0.70, 0.28, 0.02),    # Realistic gender distribution
                 replace = TRUE),
     age_group = sample(c('18-24','25-34','35-44','45-54','55+'), 
                       size = n_users,
-                      prob = c(0.10, 0.15, 0.35, 0.30, 0.10),  
+                      prob = c(0.10, 0.15, 0.35, 0.30, 0.10),  # Age distribution
                       replace = TRUE),
     population_density = sample(
-        x = c(sample(3000:5000, n_users * 0.20, replace = TRUE), 
-              sample(1000:2999, n_users * 0.15, replace = TRUE),
-              sample(5:999, n_users * 0.65, replace = TRUE)),
+        x = c(sample(3000:5000, n_users * 0.20, replace = TRUE),  # Urban
+              sample(1000:2999, n_users * 0.15, replace = TRUE),  # Suburban
+              sample(5:999, n_users * 0.65, replace = TRUE)),     # Rural
         size = n_users,
         replace = TRUE
     )
 )
 
+# Generate Health Campaign Dimension Table
+# Defines different types of step challenges and their durations
 dim_health_campaign <- tibble(
     campaign_id = replicate(n_campaigns, UUIDgenerate() %>% str_replace_all("-", "")),
     campaign_name = paste("Step Challenge", c("Basic", "Pro", "Advanced")),
-    num_campaign_activities = c(15, 30, 60)
+    num_campaign_activities = c(15, 30, 60)  # Duration in days for each campaign
 )
 
-experimental_users  <- sample(dim_user$user_id, size = floor(n_users * 0.7), replace = FALSE)
-n_fact_records  <-  10000
+# ============================================================================
+# 2. Fact Tables Generation
+# ============================================================================
 
+# Select users for experimental group (70% of total users)
+experimental_users <- sample(dim_user$user_id, 
+                           size = floor(n_users * 0.7), 
+                           replace = FALSE)
+
+# Generate Campaign Enrollment Facts
+# Records which users participated in which campaigns and when
 fact_user_health_campaign <- tibble(
     user_health_campaign_id = replicate(n_fact_records, UUIDgenerate() %>% str_replace_all("-", "")),
     user_id = sample(experimental_users, n_fact_records, replace = TRUE),
@@ -83,11 +104,12 @@ fact_user_health_campaign <- tibble(
     ungroup() %>%
     select(-activated_ts)
 
-
-
-
-# Create daily step data with positive campaign effect
-
+# Generate Daily Step Count Facts
+# Creates realistic step count data with various factors affecting the counts:
+# - Weekend vs. weekday patterns
+# - Seasonal variations
+# - Campaign participation effects
+# - Individual user activity levels
 fact_daily_steps <- dim_user %>%
     # Start with user and their activation dates
     select(user_id, activated_ts) %>%
@@ -140,8 +162,7 @@ fact_daily_steps <- dim_user %>%
         # Some users are naturally more/less active
         step_count = step_count * (1 + sample(seq(-0.2, 0.2, 0.1), n_distinct(user_id), 
                                             replace = TRUE)[as.factor(user_id)])
-    ) %>%
-    # Add campaign effect
+    )  %>% 
     left_join(
         fact_user_health_campaign %>%
             select(user_id, campaign_enrolled_ts, campaign_completed_ts),
@@ -166,6 +187,17 @@ fact_daily_steps <- dim_user %>%
     ) %>%
     # Remove unnecessary columns
     select(user_id, date, step_count) %>%
+    group_by(user_id, date) %>%
+    summarize(step_count = mean(step_count))  %>% 
+    ungroup() %>% 
     # Sort by user and date
     arrange(user_id, date)
 
+
+# Save each dataset to .rds files
+
+
+write_rds(dim_user, "outputs/data/raw/users.rds")
+write_rds(dim_health_campaign, "outputs/data/raw/campaigns.rds")
+write_rds(fact_user_health_campaign, "outputs/data/raw/user_campaigns.rds")
+write_rds(fact_daily_steps, "outputs/data/raw/daily_steps.rds")

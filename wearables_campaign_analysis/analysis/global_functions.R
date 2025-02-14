@@ -1,4 +1,4 @@
-league_fill  <- "blue"
+league_fill  <- "#d9b554"
 bar_plot_width <- 0.7
 density_plot_alpha <- 0.5
 
@@ -33,8 +33,8 @@ univariate_eda <- function(data, colname) {
     # Convert colname to a symbol for tidy evaluation
     col_sym <- sym(colname)
     
-    # Get the data type of the column
-    col_type <- class(rlang::eval_tidy(col_sym, data))
+    # Get the column data properly
+    col_data <- data[[colname]]
     
     # Clean and format the column name for display
     col_cleaned <- str_to_title(str_replace_all(colname, "_", " "))
@@ -42,33 +42,36 @@ univariate_eda <- function(data, colname) {
     
     # Add count and facet_label to the data
     data <- data %>%
-  
         mutate(
-                total_users = n_distinct(user_id),
-          facet_label = glue("Unique Users ({total_users})"))
+            total_users = n_distinct(user_id),
+            facet_label = glue("Unique Users ({total_users})"))
     
     # Check if the data type is character or factor
-    if (col_type %in% c("character", "factor")) {
+    if (is.character(col_data) || is.factor(col_data)) {
         data %>%
             group_by({{col_sym}}, total_users, facet_label) %>%
             summarize(unique_users = n_distinct(user_id)) %>%
             ungroup() %>%
             mutate(
                 pct_users = unique_users / total_users,
-                col_grouped = fct_reorder({{col_sym}}, unique_users),
-               
+                # Only reorder if it's not already an ordered factor
+                col_grouped = if (is.ordered(col_data)) {
+                    !!col_sym
+                } else {
+                    fct_reorder(!!col_sym, unique_users)
+                }
             ) %>%
             ggplot(aes(x = col_grouped, y = unique_users)) +
             geom_col(fill = league_fill, width = bar_plot_width) +
             theme_tq() +
-            geom_text(aes(label = glue("{scales::percent(round(pct_users, 2))} (n = {unique_users})")), vjust = -0.5, size = 2.5) +
-            
+            geom_text(aes(label = glue("{scales::percent(round(pct_users, 2))} (n = {unique_users})")), 
+                     vjust = -0.5, size = 2.5) +
             labs(title = title, x = col_cleaned) +
             theme(title = element_text(size = 8)) +
             facet_wrap(~facet_label)
         
         # Check if the data type is integer or numeric
-    } else if (col_type %in% c("integer", "numeric")) {
+    } else if (is.numeric(col_data)) {
         # Create histogram visualization
         hist_viz <- data %>%
             ggplot(aes(x = {{col_sym}})) +
@@ -112,6 +115,13 @@ univariate_eda <- function(data, colname) {
     }
 }
 
+univariate_eda_with_save <- function(data, variable) {
+    plot_result <- univariate_eda(data, variable)
+    plot_name <- paste0("plots/univariate_analysis_by_", variable, ".png")
+    ggsave(plot_name, plot_result[[1]], width = 10, height = 6)
+    return(plot_result)
+}
+
 
 eda_univariate_all_columns <- function(data) {
     results <- map(colnames(data), function(colname) {
@@ -121,21 +131,23 @@ eda_univariate_all_columns <- function(data) {
 
 
 bivariate_eda <- function(data, explanatory_var, response_var) {
-    
     # Convert column names to symbols
     explanatory_var_sym <- sym(explanatory_var)
     response_var_sym <- sym(response_var)
     
-    # Determine the data type of response_var
-    response_var_type <- class(rlang::eval_tidy(response_var_sym, data))
-    explanatory_var_type <- class(rlang::eval_tidy(explanatory_var_sym, data))
+    # Determine the data type of response_var and handle ordered factors
+    response_var_type <- class(rlang::eval_tidy(response_var_sym, data))[1]  # Take first class
+    explanatory_var_type <- class(rlang::eval_tidy(explanatory_var_sym, data))[1]  # Take first class
     
     # Clean column name for the title label
     response_var_cleaned <- str_to_title(str_replace_all(response_var, "_", " "))
     title <- glue("Distribution Of Users By {response_var_cleaned}")
     
+    # Modified type checking to include ordered factors
+    is_categorical <- function(x) x %in% c("character", "factor", "ordered")
+    is_numeric <- function(x) x %in% c("numeric", "integer")
     
-    if (response_var_type %in% c("character", "factor") & explanatory_var_type %in% c("character", "factor")) {
+    if (is_categorical(response_var_type) && is_categorical(explanatory_var_type)) {
         # Create bar plot for categorical response_var
         viz <- data %>%
             group_by({{response_var_sym}}) %>%
@@ -156,7 +168,7 @@ bivariate_eda <- function(data, explanatory_var, response_var) {
         
         return(viz)
         
-    } else if (response_var_type %in% c("numeric", "integer")  & explanatory_var_type %in% c("character", "factor")) {
+    } else if (is_numeric(response_var_type) && is_categorical(explanatory_var_type)) {
         # Create box plot for numerical response_var
         box_viz <- data %>%
             ggplot(aes(y = {{response_var_sym}}, x = {{explanatory_var_sym}})) +
@@ -183,9 +195,7 @@ bivariate_eda <- function(data, explanatory_var, response_var) {
         return(list(hist_viz, box_viz, quant_tbl))
         
     
-    }
-    
-    else if (response_var_type %in% c("numeric", "integer")  & explanatory_var_type %in% c("numeric", "integer")) {
+    } else if (is_numeric(response_var_type) && is_numeric(explanatory_var_type)) {
         # Create Scatter plot for numerical response_var
         scatter_viz <- data %>%
             ggplot(aes(y = {{response_var_sym}}, x = {{explanatory_var_sym}})) +
@@ -196,5 +206,9 @@ bivariate_eda <- function(data, explanatory_var, response_var) {
         
     }
     
-    
+    # Add default return with warning if no conditions are met
+    warning(glue("Unsupported variable types combination: 
+                 response_var ({response_var_type}), 
+                 explanatory_var ({explanatory_var_type})"))
+    return(NULL)
 }
