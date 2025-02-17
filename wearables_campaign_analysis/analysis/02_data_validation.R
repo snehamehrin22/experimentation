@@ -1,25 +1,47 @@
-# Load required libraries
-library(tidyverse)
-library(lubridate)
+################################################################################
+# Data Validation and Cleaning Pipeline
+# 
+# This script performs data quality checks and cleaning on the health tracking
+# dataset. It validates user activity data, campaign participation, and daily
+# step counts, then produces a cleaned dataset for further analysis.
+#
+# Author: [Your Name]
+# Last Modified: [Date]
+################################################################################
 
-# Define data directory
+# Load required libraries
+library(tidyverse)  # For data manipulation and visualization
+library(lubridate)  # For date/time operations
+
+################################################################################
+# Configuration
+################################################################################
+
+# Define data directories
 DATA_DIR <- "outputs/data/raw"
 PROCESSED_DIR <- "outputs/data/processed"
 
 # Create processed directory if it doesn't exist
 dir.create(PROCESSED_DIR, recursive = TRUE, showWarnings = FALSE)
 
-# Load data
+################################################################################
+# Data Loading
+################################################################################
+
 message("Loading data...")
 users <- read_rds(file.path(DATA_DIR, "users.rds"))
 campaigns <- read_rds(file.path(DATA_DIR, "campaigns.rds"))
 user_campaigns <- read_rds(file.path(DATA_DIR, "user_campaigns.rds"))
 daily_steps <- read_rds(file.path(DATA_DIR, "daily_steps.rds"))
 
-# Basic data validation checks
+################################################################################
+# Data Validation
+################################################################################
+
 message("\nRunning data validation checks...")
 
-# 1. Check for missing values
+#' Check for missing values across all datasets
+#' Returns count of NA values per column in each dataset
 message("\nChecking for missing values:")
 missing_counts <- list(
     users = colSums(is.na(users)),
@@ -29,7 +51,7 @@ missing_counts <- list(
 )
 print(missing_counts)
 
-# 2. Check for duplicate records
+#' Check for duplicate records based on primary keys
 message("\nChecking for duplicates:")
 duplicates <- list(
     users = users %>% group_by(user_id) %>% filter(n() > 1) %>% nrow(),
@@ -45,8 +67,7 @@ duplicates <- list(
 )
 print(duplicates)
 
-
-# 3. Check date ranges
+#' Validate date ranges across all temporal data
 message("\nChecking date ranges:")
 date_ranges <- list(
     user_activation = range(users$activated_ts),
@@ -56,7 +77,7 @@ date_ranges <- list(
 )
 print(date_ranges)
 
-# 5. Basic statistics
+#' Calculate basic statistics for data overview
 message("\nBasic statistics:")
 stats <- list(
     total_users = nrow(users),
@@ -68,26 +89,43 @@ stats <- list(
 )
 print(stats)
 
-# Data cleaning based on validation results
-message("\nCleaning data...")
-
-# 1. Remove any duplicate records
-daily_steps_cleaned <- daily_steps %>%
-    distinct(user_id, date, .keep_all = TRUE)
-
-# 2. Remove invalid step counts (negative or unreasonably high)
-daily_steps_cleaned <- daily_steps_cleaned %>%
-    filter(step_count >= 0, step_count < 100000)  # Assuming 100k steps is unreasonable
-
-# 3. Ensure dates are within reasonable range
-daily_steps_cleaned <- daily_steps_cleaned %>%
-    filter(date >= min(users$activated_ts),
-           date <= Sys.Date())  # No future dates
+################################################################################
+# Data Cleaning
+################################################################################
 
 
-# Save cleaned data
-message("\nSaving cleaned data...")
-write_rds(daily_steps_cleaned, file.path(PROCESSED_DIR, "daily_steps_cleaned.rds"))
 
-message("\nValidation and cleaning complete!")
-message("Cleaned data saved to: ", PROCESSED_DIR)
+################################################################################
+# Data Completeness Analysis
+################################################################################
+
+#' Analyze data completeness per user
+#' Calculates the percentage of days with step data between first and last recording
+steps_continuity_analysis <- daily_steps %>% 
+    group_by(user_id) %>% 
+    summarize(
+        total_days = n(),
+        first_date = min(date),
+        last_date = max(date),
+        expected_days = as.numeric(difftime(last_date, first_date, units = 'days')) + 1,
+        completeness = (total_days / expected_days) * 100
+    ) %>% 
+    ungroup()
+
+#' Generate completeness statistics
+completeness_stats <- steps_continuity_analysis %>%
+    summarize(
+        avg_completeness = mean(completeness),
+        median_completeness = median(completeness),
+        users_above_90pct = sum(completeness >= 90),
+        total_users = n(),
+        min_completeness = min(completeness),
+        max_completeness = max(completeness)
+    )
+print(completeness_stats)
+
+
+
+
+
+

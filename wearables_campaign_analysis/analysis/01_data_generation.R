@@ -110,35 +110,39 @@ fact_user_health_campaign <- tibble(
 # - Seasonal variations
 # - Campaign participation effects
 # - Individual user activity levels
-fact_daily_steps <- dim_user %>%
-    # Start with user and their activation dates
-    select(user_id, activated_ts) %>%
-    # Join with campaign data to get last completion date
-    left_join(
-        fact_user_health_campaign %>%
-            group_by(user_id) %>%
-            summarise(last_campaign_end = max(campaign_completed_ts)),
-        by = "user_id"
+fact_daily_steps <- user_campaigns %>%
+    # Get the first campaign enrollment and last campaign completion date for each user
+    group_by(user_id) %>%
+    summarise(
+        first_campaign_start = min(campaign_enrolled_ts),
+        max_campaign_completed_ts = max(campaign_completed_ts)
     ) %>%
-    # Create date range until 60 days after last campaign (or use original end date if user had no campaigns)
+    # Join with user activation dates
+    left_join(users %>% select(user_id, activated_ts), by = "user_id") %>%
+    # Create date range including pre and post treatment periods
     mutate(
-        end_date = if_else(
-            !is.na(last_campaign_end),
-            as_date(last_campaign_end) + days(60),
-            ymd("2024-01-01")
+        start_date = as_date(first_campaign_start) - days(60),
+        end_date = as_date(max_campaign_completed_ts) + days(60)
+    ) %>%
+    # Create all possible user-date combinations using crossing
+    crossing(date = seq(min(start_date), max(end_date), by = "day")) %>%
+    # Only keep dates within user's range
+    filter(date >= start_date, date <= end_date) %>%
+    # Add period flags
+    mutate(
+        period = case_when(
+            date >= (as_date(first_campaign_start) - days(60)) & 
+            date < as_date(first_campaign_start) ~ "pre_treatment",
+            
+            date > as_date(max_campaign_completed_ts) & 
+            date <= (as_date(max_campaign_completed_ts) + days(60)) ~ "post_treatment",
+            
+            TRUE ~ "treatment"
         )
     ) %>%
-    # Create all possible user-date combinations up to the calculated end date
-    crossing(date = seq(min(as_date(activated_ts)), max(.$end_date), by = "day")) %>%
-    # Only keep dates after user activation and before end_date
-    filter(date >= as_date(activated_ts), date <= end_date) %>%
-    # Randomly drop some days (device not connected)
-    group_by(user_id) %>%
-    slice_sample(prop = 0.8) %>%  # Keep 80% of days randomly
-    ungroup() %>%
     # Generate step counts
     mutate(
-        # Base step count
+        # Base step count with campaign completion effect
         step_count = case_when(
             # Weekend steps tend to be lower
             weekdays(date) %in% c("Saturday", "Sunday") ~ 
@@ -161,36 +165,28 @@ fact_daily_steps <- dim_user %>%
         
         # Some users are naturally more/less active
         step_count = step_count * (1 + sample(seq(-0.2, 0.2, 0.1), n_distinct(user_id), 
-                                            replace = TRUE)[as.factor(user_id)])
-    )  %>% 
-    left_join(
-        fact_user_health_campaign %>%
-            select(user_id, campaign_enrolled_ts, campaign_completed_ts),
-        by = "user_id"
+                                            replace = TRUE)[as.factor(user_id)]),
+        
+        # Increase steps for dates after campaign completion
+        step_count = case_when(
+            date > as_date(max_campaign_completed_ts) ~ 
+                round(step_count * sample(seq(1.2, 1.4, 0.1), n(), replace = TRUE)),
+            TRUE ~ step_count
+        )
     ) %>%
-    group_by(user_id) %>%
-    mutate(
-        # Increase steps during and after campaign
-        campaign_multiplier = case_when(
-            date >= as_date(campaign_enrolled_ts) & date <= as_date(campaign_completed_ts) ~ 
-                sample(seq(1.2, 1.4, 0.1), 1),  # 20-40% increase during campaign
-            date > as_date(campaign_completed_ts) ~ 
-                sample(seq(1.1, 1.3, 0.1), 1),  # 10-30% increase after campaign
-            TRUE ~ 1.0
-        ),
-        step_count = round(step_count * campaign_multiplier)
-    ) %>%
-    ungroup() %>%
     # Round steps to integers and ensure no negative values
     mutate(
         step_count = pmax(0, round(step_count))
     ) %>%
     # Remove unnecessary columns
-    select(user_id, date, step_count) %>%
-    group_by(user_id, date) %>%
-    summarize(step_count = mean(step_count))  %>% 
-    ungroup() %>% 
-    # Sort by user and date
+    select(user_id, date,period, step_count) %>%
+    # Before the final summarize, randomly drop entire dates
+    group_by(user_id) %>%
+    slice_sample(prop = 0.80) %>%  # Keep 90% of dates randomly (drop 10%)
+    # Continue with existing summarization
+    group_by(user_id, date, period) %>%
+    summarize(step_count = mean(step_count)) %>%
+    ungroup() %>%
     arrange(user_id, date)
 
 
@@ -201,3 +197,7 @@ write_rds(dim_user, "outputs/data/raw/users.rds")
 write_rds(dim_health_campaign, "outputs/data/raw/campaigns.rds")
 write_rds(fact_user_health_campaign, "outputs/data/raw/user_campaigns.rds")
 write_rds(fact_daily_steps, "outputs/data/raw/daily_steps.rds")
+
+
+
+
